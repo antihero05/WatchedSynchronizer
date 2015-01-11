@@ -1,4 +1,25 @@
-﻿using System.Reflection;
+﻿#region GPL License
+
+//Mediaportal (http://www.team-mediaportal.com/) Plugin - WatchedSynchronizer
+//Copyright (C) 2015 Max Wimmelbacher
+//
+//This program is free software; you can redistribute it and/or
+//modify it under the terms of the GNU General Public License
+//as published by the Free Software Foundation; either version 2
+//of the License, or (at your option) any later version.
+//
+//This program is distributed in the hope that it will be useful,
+//but WITHOUT ANY WARRANTY; without even the implied warranty of
+//MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+//GNU General Public License for more details.
+
+//You should have received a copy of the GNU General Public License
+//along with this program; if not, write to the Free Software
+//Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
+#endregion
+
+using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using MediaPortal.Common.Utils;
@@ -24,5 +45,5 @@ using MediaPortal.Common.Utils;
 
 [assembly: Guid("b298ce34-f556-44cc-a131-83ec57fd6a50")]
 
-[assembly: AssemblyVersion("0.5.1.4")]
-[assembly: AssemblyFileVersion("0.5.1.4")]
+[assembly: AssemblyVersion("0.5.4.2")]
+[assembly: AssemblyFileVersion("0.5.4.2")]
