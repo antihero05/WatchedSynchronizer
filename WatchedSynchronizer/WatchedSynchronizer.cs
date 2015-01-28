@@ -271,7 +271,7 @@ namespace WatchedSynchronizer
 
     /// <summary>
     /// The method OnTVSeriesToggledWatched is listening for messages indicating that a episod was toggled watched using the menu in MediaPortal.
-    /// This information is used to update the additional databases.
+    /// This information is used to set the information related to Watched
     /// </summary>
     /// 
 
@@ -279,7 +279,8 @@ namespace WatchedSynchronizer
     {
       foreach (DBEpisode objLoop in lstDBEpisodes)
       {
-        OnPlayBackEndedTVSeriesDataBases(objLoop[DBEpisode.cFilename]);
+        Log.Debug("WatchedSynchronizer: The Watched Status for file '" + objLoop[DBEpisode.cFilename] + "' was toggled to '" + bolWatched + "',");
+        OnTVSeriesToggledWatchedImpl(objLoop[DBEpisode.cFilename], bolWatched);
       }
     }
 
@@ -340,7 +341,7 @@ namespace WatchedSynchronizer
     #region Video databases
 
     /// <summary>
-    /// Methods in this region are run if the media type is "MPVideo".
+    /// Methods in this region are run if the media type is "MPVideo" and a gplayer event was triggered.
     /// The defined methods run the necessary commands to update all configured video databases.
     /// </summary>
 
@@ -620,9 +621,102 @@ namespace WatchedSynchronizer
     #region TVSeries databases
 
     /// <summary>
-    /// Methods in this region are run if the media type is "MPTVSeries".
+    /// Methods in this region are run if the media type is "MPTVSeries" or the trigger was an event related to "MPTVSeries".
     /// The defined methods run the necessary commands to update all configured video databases.
     /// </summary>
+
+    //The method OnTVSeriesToggledWatchedImpl is run when the event OnTVSeriesToggledWatched was triggered.
+
+    private void OnTVSeriesToggledWatchedImpl(string strFileName, bool bolWatched)
+    {
+      foreach (AdditionalTVSeriesDatabase objLoop in mTVSeriesDatabases)
+      {
+        objLoop.ReOpen();
+        bool bolUpdated = false;
+        ArrayList alsCompositeIds = new ArrayList();
+
+        //Get CompositeId(s). This is done since it it used for checking that the respective row is available in the additional database.
+
+        string strCompositeId = objLoop.GetCompositeId(strFileName);
+        if (strCompositeId == string.Empty)
+        {
+          Log.Warn("WatchedSynchronizer: File '" + strFileName + "' is not available in database '" + objLoop.DatabaseName + "'.");
+          return;
+        }
+        else
+        {
+          objLoop.GetCompositeIdsForEpisode(strCompositeId, ref alsCompositeIds);
+        }
+        if (alsCompositeIds.Count <= 0)
+        {
+          Log.Warn("WatchedSynchronizer: File '" + strFileName + "' is not available in database '" + objLoop.DatabaseName + "'.");
+          return;
+        }
+
+        //Updates the Watched status for all CompositeIds.
+
+        for (int intLoop = 0; intLoop < alsCompositeIds.Count; intLoop++)
+        {
+          strCompositeId = (string)alsCompositeIds[intLoop];
+          bool bolWatchedCompositeId = false;
+          string strWatchedDate;
+          int intStopTime;
+
+          //Check if episode was already watched.
+
+          objLoop.GetEpisodeWatchedStatus(strCompositeId, out bolWatchedCompositeId, out strWatchedDate, out intStopTime);
+
+          //Updates the Watched status if episode was unwatched and watched was toggled.
+
+          if (bolWatchedCompositeId == false && bolWatched == true)
+          {
+
+            //Update the Watched status for the episodes and correlated it is unwatched.
+
+            objLoop.SetEpisodeWatchedStatus(strCompositeId, true, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"), 0, true);
+            objLoop.EpisodePlayCountIncrease(strCompositeId, true);
+            string strSeasonId;
+            bool bolSeasonWatched = false;
+            objLoop.GetSeasonWatchedStatus(strCompositeId, out strSeasonId, out bolSeasonWatched);
+            if (bolSeasonWatched == false)
+            {
+
+              //Update the Unwatched episodes count for the season if it is unwatched.
+
+              objLoop.SeasonUnWatchedCountDecrease(strSeasonId);
+              string strSeriesId;
+              bool bolSeriesWatched = false;
+              objLoop.GetSeriesWatchedStatus(strCompositeId, out strSeriesId, out bolSeriesWatched);
+              if (bolSeriesWatched == false)
+              {
+
+                //Update the Unwatched episodes count for the series if it is unwatched.
+
+                objLoop.SeriesUnWatchedCountDecrease(strSeriesId);
+              }
+            }
+            bolUpdated = true;
+          }
+          else
+          {
+
+            //Updates the Watched status if episode was watched and watched or unwatched was toggled.
+
+            objLoop.SetEpisodeWatchedStatus(strCompositeId, bolWatched, strWatchedDate, intStopTime);
+            bolUpdated = true;
+          }
+
+          //Check if update was successfull and write to media portal log.
+
+          if (bolUpdated == true)
+          {
+            Log.Info("WatchedSynchronizer: Information for file '" + strFileName + "' was updated in database '" + objLoop.DatabaseName + "'.");
+          }
+          objLoop.Dispose();
+        }
+      }
+    }
+
 
     //Method OnPlayBackEndedTVSeriesDataBases is run when tvseries was watched to the end.
 
@@ -701,12 +795,13 @@ namespace WatchedSynchronizer
             {
               objLoop.SetEpisodeWatchedStatus(strCompositeId, bolWatched, strWatchedDate, 0);
             }
+            objLoop.EpisodePlayCountIncrease(strCompositeId);
             bolUpdated = true;
           }
           else
           {
             objLoop.SetEpisodeWatchedStatus(strCompositeId, bolWatched, strWatchedDate, 0);
-
+            objLoop.EpisodePlayCountIncrease(strCompositeId);
             bolUpdated = true;
           }
         }
@@ -803,6 +898,7 @@ namespace WatchedSynchronizer
             {
               objLoop.SetEpisodeWatchedStatus(strCompositeId, true, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"), 0);
             }
+            objLoop.EpisodePlayCountIncrease(strCompositeId);
             bolUpdated = true;
           }
           else

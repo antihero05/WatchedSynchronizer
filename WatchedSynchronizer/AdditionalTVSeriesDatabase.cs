@@ -158,6 +158,21 @@ namespace WatchedSynchronizer
       bolSeasonWatched = mDatabase.GetSeriesWatchedStatus(strSeriesId);
     }
 
+    //Increases the number of the episode plays considering if it was not toggled watched in the MediaPortal menu.
+
+    public void EpisodePlayCountIncrease(string strCompositeId, bool bolToggledEpisode = false)
+    {
+      int intEpisodePlayCount = mDatabase.GetEpisodePlayCount(strCompositeId);
+      if (bolToggledEpisode && intEpisodePlayCount > 0)
+      {
+        mDatabase.SetEpisodePlayCount(strCompositeId, intEpisodePlayCount);
+      }
+      else
+      {
+        mDatabase.SetEpisodePlayCount(strCompositeId, intEpisodePlayCount + 1);
+      }
+    }
+
     //Decreases the number of the unwatched episodes of a season.
 
     public void SeasonUnWatchedCountDecrease(string strSeasonId)

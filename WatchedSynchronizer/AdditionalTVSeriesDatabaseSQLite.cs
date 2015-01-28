@@ -83,18 +83,15 @@ namespace WatchedSynchronizer
       try
       {
         string strCompositeID = string.Empty;
-        if (CheckCache(DBEpisode.cTableName, strFilenameAndPath, DBEpisode.cCompositeID, ref strCompositeID) == false)
+        strFilenameAndPath = strFilenameAndPath.Trim();
+        DatabaseUtility.RemoveInvalidChars(ref strFilenameAndPath);
+        string strSQL = String.Format("SELECT * FROM {0} WHERE {1} = '{2}'", DBEpisode.cTableName, DBEpisode.cFilename, strFilenameAndPath);
+        Log.Debug("WatchedSynchronizer: (GetCompositeId) SQL statement '" + strSQL + "' is going to be executed in database '" + mDatabase.DatabaseName + "'.");
+        SQLiteResultSet objResults = mDatabase.Execute(strSQL);
+        if (objResults.Rows.Count > 0)
         {
-          strFilenameAndPath = strFilenameAndPath.Trim();
-          DatabaseUtility.RemoveInvalidChars(ref strFilenameAndPath);
-          string strSQL = String.Format("SELECT * FROM {0} WHERE {1} = '{2}'", DBEpisode.cTableName, DBEpisode.cFilename, strFilenameAndPath);
-          Log.Debug("WatchedSynchronizer: (GetCompositeId) SQL statement '" + strSQL + "' is going to be executed in database '" + mDatabase.DatabaseName + "'.");
-          SQLiteResultSet objResults = mDatabase.Execute(strSQL);
-          if (objResults.Rows.Count > 0)
-          {
-            strCompositeID = DatabaseUtility.Get(objResults, 0, DBEpisode.cCompositeID);
-            AddToCache(DBEpisode.cTableName, strCompositeID, objResults);
-          }
+          strCompositeID = DatabaseUtility.Get(objResults, 0, DBEpisode.cCompositeID);
+          AddToCache(DBEpisode.cTableName, strCompositeID, objResults);
         }
         return strCompositeID;
       }
@@ -241,6 +238,51 @@ namespace WatchedSynchronizer
         {
           string strSQL = String.Format("UPDATE {0} SET {1} = {2} WHERE {3} = '{4}'", DBOnlineEpisode.cTableName, DBOnlineEpisode.cWatched, intWatchedStatus, DBOnlineEpisode.cCompositeID, strCompositeId);
           Log.Debug("WatchedSynchronizer: (SetEpisodeWatchedStatus) SQL statement '" + strSQL + "' is going to be executed in database '" + mDatabase.DatabaseName + "'.");
+          mDatabase.Execute(strSQL);
+        }
+      }
+      catch (Exception ex)
+      {
+        Log.Error("WatchedSynchronizer: TVSeries database exception err:{0} stack:{1}", ex.Message, ex.StackTrace);
+      }
+    }
+
+    public int GetEpisodePlayCount(string strCompositeId)
+    {
+      try
+      {
+        string strEpisodePlayCount = string.Empty;
+        if (CheckCache(DBOnlineEpisode.cTableName, strCompositeId, DBOnlineEpisode.cPlayCount, ref strEpisodePlayCount) == false)
+        {
+          string strSQL = String.Format("SELECT * FROM {0} WHERE {1} = '{2}'", DBOnlineEpisode.cTableName, DBOnlineEpisode.cCompositeID, strCompositeId);
+          Log.Debug("WatchedSynchronizer: (GetEpisodePlayCount) SQL statement '" + strSQL + "' is going to be executed in database '" + mDatabase.DatabaseName + "'.");
+          SQLiteResultSet objResults = mDatabase.Execute(strSQL);
+          if (objResults.Rows.Count > 0)
+          {
+            strEpisodePlayCount = DatabaseUtility.Get(objResults, 0, DBOnlineEpisode.cPlayCount);
+            AddToCache(DBOnlineEpisode.cTableName, strCompositeId, objResults);
+          }
+        }
+        int intUnwatchedEpisodes;
+        Int32.TryParse(strEpisodePlayCount, out intUnwatchedEpisodes);
+        return intUnwatchedEpisodes;
+      }
+      catch (Exception ex)
+      {
+        Log.Error("WatchedSynchronizer: TVSeries database exception err:{0} stack:{1}", ex.Message, ex.StackTrace);
+      }
+      return 0;
+    }
+
+    public void SetEpisodePlayCount(string strCompositeId, int intPlayCount)
+    {
+      try
+      {
+        string strPlayCount = intPlayCount.ToString();
+        if (CheckCache(DBOnlineEpisode.cTableName, strCompositeId, DBOnlineEpisode.cPlayCount, ref strPlayCount) == false)
+        {
+          string strSQL = String.Format("UPDATE {0} SET {1} = '{2}' WHERE {3} = '{4}'", DBOnlineEpisode.cTableName, DBOnlineEpisode.cPlayCount, strPlayCount, DBOnlineEpisode.cCompositeID, strCompositeId);
+          Log.Debug("WatchedSynchronizer: (SetEpisodePlayCount) SQL statement '" + strSQL + "' is going to be executed in database '" + mDatabase.DatabaseName + "'.");
           mDatabase.Execute(strSQL);
         }
       }
