@@ -143,7 +143,8 @@ namespace WatchedSynchronizer
     {
       Log.Info("WatchedSynchronizer: Starting");
       LoadConfiguration();
-      GUIWindowManager.Receivers += new SendMessageHandler(GUIWindowManager_Receivers);
+      GUIWindowManager.Receivers += new SendMessageHandler(OnGUIMessageReceived);
+      TVSeriesPlugin.ToggleWatched += new TVSeriesPlugin.ToggleWatchedEventDelegate(OnTVSeriesToggledWatched);
       g_Player.PlayBackEnded += OnPlayBackEnded;
       g_Player.PlayBackChanged += OnPlayBackChanged;
       g_Player.PlayBackStopped += OnPlayBackStopped;
@@ -152,7 +153,8 @@ namespace WatchedSynchronizer
     public void Stop()
     {
       Log.Info("WatchedSynchronizer: Stopping");
-      GUIWindowManager.Receivers -= new SendMessageHandler(GUIWindowManager_Receivers);
+      GUIWindowManager.Receivers -= new SendMessageHandler(OnGUIMessageReceived);
+      TVSeriesPlugin.ToggleWatched -= new TVSeriesPlugin.ToggleWatchedEventDelegate(OnTVSeriesToggledWatched);
       g_Player.PlayBackEnded -= OnPlayBackEnded;
       g_Player.PlayBackChanged -= OnPlayBackChanged;
       g_Player.PlayBackStopped -= OnPlayBackStopped;
@@ -163,13 +165,13 @@ namespace WatchedSynchronizer
     #region Mediaportal.GUI.Library.GUIWindowManager events
 
     /// <summary>
-    /// The method GUIWindowManager_Receivers is listening for messages indicating that a media playback started and by whom.
+    /// The method OnGUIMessageReceived is listening for messages indicating that a media playback started and by whom.
     /// This information is used to determine which database needs to be updated after the media playback stopped.
     /// </summary>
 
-    private void GUIWindowManager_Receivers(GUIMessage message)
+    private void OnGUIMessageReceived(GUIMessage objMessage)
     {
-      if (message.Message == GUIMessage.MessageType.GUI_MSG_PLAYBACK_STARTED)
+      if (objMessage.Message == GUIMessage.MessageType.GUI_MSG_PLAYBACK_STARTED)
       {
         Log.Debug("WatchedSynchronizer: Encountered message 'GUI_MSG_PLAYBACK_STARTED' for WindowId '" + GUIWindowManager.GetPreviousActiveWindow() + "'.");
         switch (GUIWindowManager.GetPreviousActiveWindow())
@@ -260,6 +262,24 @@ namespace WatchedSynchronizer
               break;
             }
         }
+      }
+    }
+
+    #endregion
+
+    #region WindowPlugins.GUITVSeries.TVSeriesPlugin events
+
+    /// <summary>
+    /// The method OnTVSeriesToggledWatched is listening for messages indicating that a episod was toggled watched using the menu in MediaPortal.
+    /// This information is used to update the additional databases.
+    /// </summary>
+    /// 
+
+    private void OnTVSeriesToggledWatched(DBSeries objSeries, List<DBEpisode> lstDBEpisodes, bool bolWatched)
+    {
+      foreach (DBEpisode objLoop in lstDBEpisodes)
+      {
+        OnPlayBackEndedTVSeriesDataBases(objLoop[DBEpisode.cFilename]);
       }
     }
 
