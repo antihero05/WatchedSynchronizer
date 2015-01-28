@@ -184,25 +184,24 @@ Click Next to continue or Cancel to exit Setup.</Value>
       <Major>0</Major>
       <Minor>5</Minor>
       <Build>4</Build>
-      <Revision>1</Revision>
+      <Revision>3</Revision>
     </Version>
-    <ExtensionDescription>WatchedSynchronizer is a process plugin that synchronizes several informations accros all your MediaPortal databases. As the plugin name suggest the plugin focuses on synchronizing the watched status of your media accross several databases. This includes extended information like the time you stopped the playback which is responsible for the watched percentage available in MediaPortal.
+    <ExtensionDescription>WatchedSynchronizer is a process plugin that synchronizes several informations across your MediaPortal databases. As the plugin name suggest the plugin focuses on synchronizing the watched status of your media accross several databases. This includes extended information like the time you stopped the playback. This is responsible for the watched percentage displayed in MediaPortal.
 
-The plugin is intended for setups that have a centrally stored master database and multiple clients with their own databases. It is required to configure the master database as an database to synchronize on each client. If you now watch some media on one of the clients the watched status gets synchronized to the master database.
-As a result it does not matter on which client you watch some media since the status is always synchronized with other databases.
+This plugin is intended for setups that have a centrally stored master database and multiple clients with their own databases. It is recommended to configure the master database as an database to be synchronized from each client. If you watch some media on one of the clients the watched status gets synchronized to the master database and is available for all other clients as well.
 
-
+As a result it does not matter on which client you watch some media since the status is always synchronized across other databases. You keep consistent track of what you already watched.
 
 Currently supported databases for synchronizing:
 
-MP Video database
-MP TVseries database</ExtensionDescription>
-    <VersionDescription />
+MPVideo database
+MPTVSeries database</ExtensionDescription>
+    <VersionDescription>0.5.4.3: Fixed several bugs regarding the synchronization of MPTVSeries.</VersionDescription>
     <DevelopmentStatus>Stable</DevelopmentStatus>
     <OnlineLocation />
-    <ReleaseDate>2015-01-11T14:04:23.015625+01:00</ReleaseDate>
+    <ReleaseDate>2015-01-28T14:04:23</ReleaseDate>
     <Tags>multiple,several,database,databases,synchronize,watched,status</Tags>
-    <Location>C:\Dokumente und Einstellungen\MaWiDE\Desktop\WatchedSynchronizer_0.5.4.1.mpe1</Location>
+    <Location>C:\Dokumente und Einstellungen\MaWiDE\Desktop\WatchedSynchronizer_0.5.4.3.mpe1</Location>
     <Params>
       <Items>
         <SectionParam Name="Icon">
@@ -248,7 +247,7 @@ MP TVseries database</ExtensionDescription>
         <Param1 />
         <UpdateOption>OverwriteIfOlder</UpdateOption>
         <LocalFileName>WatchedSynchronizer\Resources\WatchedSynchronizerEnabled.png</LocalFileName>
-        <ZipFileName>Installer{CopyFile}\{7634f8d7-1b03-4b37-bdab-f2df7e8e957f}-WatchedSynchronizerEnabled.png</ZipFileName>
+        <ZipFileName>Installer{CopyFile}\{7af68b28-e443-4458-9b44-5c1829c96153}-WatchedSynchronizerEnabled.png</ZipFileName>
         <DestinationFilename />
       </FileItem>
     </Items>
