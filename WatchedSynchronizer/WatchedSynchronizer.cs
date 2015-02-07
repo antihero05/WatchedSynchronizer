@@ -24,6 +24,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using System.Threading;
 using System.Collections.ObjectModel;
 using MediaPortal.GUI.Library;
 using MediaPortal.Dialogs;
@@ -33,6 +34,7 @@ using MediaPortal.Configuration;
 using MediaPortal.Profile;
 using WindowPlugins.GUITVSeries;
 using WatchedSynchronizer.Configuration;
+using System.Collections.Concurrent;
 
 
 namespace WatchedSynchronizer
@@ -55,6 +57,13 @@ namespace WatchedSynchronizer
       Unknown
     };
 
+    public enum EventType
+    {
+        StopOrChanged,
+        Ended,
+        Toggle
+    };
+
     #endregion
 
     #region Declaration
@@ -66,11 +75,155 @@ namespace WatchedSynchronizer
 
     private WatchedSynchronizerConfiguration mConfiguration;
     private Collection<AdditionalVideoDatabase> mVideoDatabases = new Collection<AdditionalVideoDatabase>();
-    private int mWatchedPercentageVideoDatabase;
-    private bool mMarkWatchedFilesVideoDatabase;
+    private static int mWatchedPercentageVideoDatabase;
+    private static bool mMarkWatchedFilesVideoDatabase;
+    private static int mWatchedPercentageTVSeriesDatabase;
     private Collection<AdditionalTVSeriesDatabase> mTVSeriesDatabases = new Collection<AdditionalTVSeriesDatabase>();
-    private int mWatchedPercentageTVSeriesDatabase;
     private WatchedSynchronizer.MediaType mCurrentMediaType = MediaType.Unknown;
+
+
+    static ConcurrentQueue<WatchedStateEvent> mWatchStateEventQueue = new ConcurrentQueue<WatchedStateEvent>();
+
+    // Create the thread object. This does not start the thread.
+
+    private WorkerThread mWorkerObject = new WorkerThread();
+    private Thread mWorkerThread = null;
+
+    private struct gPlayer
+    {
+        public int SetResumeBDTitleState;
+        public double CurrentPosition;
+        public string CurrentFile;
+        public double Duration;
+        public bool IsDVDMenu;
+        public byte[] bteResumeData;
+    };
+
+    private struct WatchedStateEvent
+    {
+        public EventType EventType;
+        public DateTime dtNextCheck;
+        public object objDB;
+        public MediaType MediaType;
+        public string strFileName;
+        public int intStopTime;
+        public bool bolWatched;
+        public bool bolUse_gPlayer;
+        public gPlayer gPlayer;
+    };
+
+    private class WorkerThread
+    {
+
+      // Volatile is used as hint to the compiler that this data member will be accessed by multiple threads. 
+
+      private volatile bool bolStop;
+
+      // This method will be called when the thread is started. 
+
+      public void DoWork()
+      {
+        WatchedStateEvent objWatchedStateEvent;
+        int intSleep = 10;
+        int intEventCount = 0;
+        int intResult;
+        TimeSpan tsSleepInterval;
+
+        Log.Debug("WatchedSynchronizer: mWorkerThread started!");
+        while (bolStop == false)
+        {
+          while (mWatchStateEventQueue.TryDequeue(out objWatchedStateEvent))
+          {
+            intEventCount = intEventCount + 1;
+            if (objWatchedStateEvent.dtNextCheck <= DateTime.Now)
+            {
+
+              //Start processing the queue.
+
+              Log.Debug("WatchedSynchronizer: mWorkerThread: New event to process: " +
+                          "EventType: '" + objWatchedStateEvent.EventType.ToString() + "' - " +
+                          "dtNextCheck: '" + objWatchedStateEvent.dtNextCheck.ToString("HH:mm:ss.fff tt") + "' - " +
+                          "MediaType: '" + objWatchedStateEvent.MediaType.ToString() + "' - " +
+                          "strFileName: '" + objWatchedStateEvent.strFileName + "' - " +
+                          "intStopTime: '" + objWatchedStateEvent.intStopTime.ToString() + "' - " +
+                          "bolWatched: '" + objWatchedStateEvent.bolWatched.ToString() + "'"
+                          );
+              if (objWatchedStateEvent.bolUse_gPlayer)
+              {
+                Log.Debug("WatchedSynchronizer: mWorkerThread: gPlayer data:" +
+
+                            "gPlayer.SetResumeBDTitleState: '" + objWatchedStateEvent.gPlayer.SetResumeBDTitleState.ToString() + "' - " +
+                            "gPlayer.CurrentPosition: '" + objWatchedStateEvent.gPlayer.CurrentPosition.ToString() + "' - " +
+                            "gPlayer.CurrentFile: '" + objWatchedStateEvent.gPlayer.CurrentFile.ToString() + "' - " +
+                            "gPlayer.Duration: '" + objWatchedStateEvent.gPlayer.Duration.ToString() + "' - " +
+                            "gPlayer.IsDVDMenu: '" + objWatchedStateEvent.gPlayer.IsDVDMenu.ToString() + "'" +
+                            "gPlayer.bteResumeData: '" + objWatchedStateEvent.gPlayer.bteResumeData.ToString()
+                            );
+              }
+
+              //Process the "WatchedStateEvent".
+
+              intResult = 0;
+              switch (objWatchedStateEvent.MediaType)
+              {
+                case MediaType.MPTVSeries:
+                  intResult = ProcessMPTVSeriesWatchedStateEvent(objWatchedStateEvent);
+                  break;
+
+                case MediaType.MPVideo:
+                  intResult = ProcessMPVideoWatchedStateEvent(objWatchedStateEvent);
+                  break;
+
+                default:
+                  Log.Debug("WatchedSynchronizer: mWorkerThread: dropped event with unknown MediaType!");
+                  break;
+              }
+
+              //Check the result and reschedule/retry if suited.
+
+              if (intResult < 0)
+              {
+
+                //We should reschedule/retray the event
+
+                objWatchedStateEvent.dtNextCheck = DateTime.Now.AddSeconds(5);   //Retry in 5 Seconds
+                mWatchStateEventQueue.Enqueue(objWatchedStateEvent);  //Event should be resheduled
+              }
+
+            }
+            else
+            {
+              //Event should be resheduled, readd it to queue
+              mWatchStateEventQueue.Enqueue(objWatchedStateEvent);
+            }
+            //calculate complete millisconds to sleep
+            if (objWatchedStateEvent.dtNextCheck > DateTime.Now)
+            {
+              tsSleepInterval = objWatchedStateEvent.dtNextCheck - DateTime.Now;
+              intSleep = (int)tsSleepInterval.TotalMilliseconds;
+            }
+          }
+
+          //Minimal sleep is 10ms to give other proceses CPU time. When queue is empty sleep is 100ms.
+
+          if (intEventCount == 0)
+          {
+            intSleep = 100;
+          }
+
+          if (intSleep < 10)
+          {
+            intSleep = 10;
+          }
+          Thread.Sleep(intSleep);
+        }
+        Log.Debug("WatchedSynchronizer: WorkerThread: terminating gracefully.");
+      }
+      public void RequestStop()
+      {
+        bolStop = true;
+      }
+    }
 
     #endregion
 
@@ -148,6 +301,15 @@ namespace WatchedSynchronizer
       g_Player.PlayBackEnded += OnPlayBackEnded;
       g_Player.PlayBackChanged += OnPlayBackChanged;
       g_Player.PlayBackStopped += OnPlayBackStopped;
+
+      //Create the mWorkerThread object.
+
+      mWorkerThread = new Thread(mWorkerObject.DoWork);
+
+      // Start the worker thread.
+
+      mWorkerThread.Start();
+      Log.Info("WatchedSynchronizer: Started!");
     }
 
     public void Stop()
@@ -158,6 +320,16 @@ namespace WatchedSynchronizer
       g_Player.PlayBackEnded -= OnPlayBackEnded;
       g_Player.PlayBackChanged -= OnPlayBackChanged;
       g_Player.PlayBackStopped -= OnPlayBackStopped;
+
+      // Request that the worker thread stop itself:
+
+      mWorkerObject.RequestStop();
+
+      // Use the Join method to block the current thread until the object's thread terminates.
+
+      mWorkerThread.Join();
+
+      Log.Info("WatchedSynchronizer: Stopped!");
     }
 
     #endregion
@@ -204,64 +376,70 @@ namespace WatchedSynchronizer
 
     private void OnPlayBackEnded(g_Player.MediaType enuType, string strFileName)
     {
+      WatchedStateEvent objWatchedStateEvent = new WatchedStateEvent();
+
       if (enuType == g_Player.MediaType.Video)
       {
         Log.Debug("WatchedSynchronizer: 'g_Player.PlayBackEnded' event with media type '" + mCurrentMediaType + "' occured for file '" + strFileName + "'.");
-        switch (mCurrentMediaType)
-        {
-          case MediaType.MPVideo:
-            {
-              OnPlayBackEndedVideoDataBases(strFileName);
-              break;
-            }
-          case MediaType.MPTVSeries:
-            {
-              OnPlayBackEndedTVSeriesDataBases(strFileName);
-              break;
-            }
-        }
+
+        //Create Watched Event
+
+        objWatchedStateEvent.EventType = EventType.Ended;
+        objWatchedStateEvent.MediaType = mCurrentMediaType;
+        objWatchedStateEvent.strFileName = strFileName;
+        objWatchedStateEvent.intStopTime = 0;
+        objWatchedStateEvent.bolWatched = false;
+        objWatchedStateEvent.bolUse_gPlayer = true;
+
+        //Enqueue Event
+
+        FireWatchedEvent(objWatchedStateEvent);
       }
     }
 
     private void OnPlayBackChanged(g_Player.MediaType enuType, int intStopTime, string strFileName)
     {
-      if (enuType == g_Player.MediaType.Video)
-      {
-        Log.Debug("WatchedSynchronizer: 'g_Player.PlayBackChanged' event with media type '" + mCurrentMediaType + "' occured for file '" + strFileName + "'.");
-        switch (mCurrentMediaType)
+        WatchedStateEvent objWatchedStateEvent = new WatchedStateEvent();
+
+        if (enuType == g_Player.MediaType.Video)
         {
-          case MediaType.MPVideo:
-            {
-              OnPlayBackStoppedOrChangedVideoDatabases(enuType, intStopTime, strFileName);
-              break;
-            }
-          case MediaType.MPTVSeries:
-            {
-              OnPlayBackStoppedOrChangedTVSeriesDatabases(enuType, intStopTime, strFileName);
-              break;
-            }
+            Log.Debug("WatchedSynchronizer: 'g_Player.PlayBackChanged' event with media type '" + mCurrentMediaType + "' occured for file '" + strFileName + "'.");
+
+            //Create Watched Event
+
+            objWatchedStateEvent.EventType = EventType.StopOrChanged;
+            objWatchedStateEvent.MediaType = mCurrentMediaType;
+            objWatchedStateEvent.strFileName = strFileName;
+            objWatchedStateEvent.intStopTime = intStopTime;
+            objWatchedStateEvent.bolWatched = false;
+            objWatchedStateEvent.bolUse_gPlayer = true;
+
+            //Enqueue Event
+
+            FireWatchedEvent(objWatchedStateEvent);
         }
-      }
     }
 
     private void OnPlayBackStopped(g_Player.MediaType enuType, int intStopTime, string strFileName)
     {
+        WatchedStateEvent objWatchedStateEvent = new WatchedStateEvent();
+
       if (enuType == g_Player.MediaType.Video)
       {
         Log.Debug("WatchedSynchronizer: 'g_Player.PlayBackStopped' event with media type '" + mCurrentMediaType + "' occured for file '" + strFileName + "'.");
-        switch (mCurrentMediaType)
-        {
-          case MediaType.MPVideo:
-            {
-              OnPlayBackStoppedOrChangedVideoDatabases(enuType, intStopTime, strFileName);
-              break;
-            }
-          case MediaType.MPTVSeries:
-            {
-              OnPlayBackStoppedOrChangedTVSeriesDatabases(enuType, intStopTime, strFileName);
-              break;
-            }
-        }
+
+        //Create Watched Event
+
+        objWatchedStateEvent.EventType = EventType.StopOrChanged;
+        objWatchedStateEvent.MediaType = mCurrentMediaType;
+        objWatchedStateEvent.strFileName = strFileName;
+        objWatchedStateEvent.intStopTime = intStopTime;
+        objWatchedStateEvent.bolWatched = false;
+        objWatchedStateEvent.bolUse_gPlayer = true;
+
+        //Enqueue Event
+
+        FireWatchedEvent(objWatchedStateEvent);
       }
     }
 
@@ -277,10 +455,25 @@ namespace WatchedSynchronizer
 
     private void OnTVSeriesToggledWatched(DBSeries objSeries, List<DBEpisode> lstDBEpisodes, bool bolWatched)
     {
+      WatchedStateEvent objWatchedStateEvent = new WatchedStateEvent();
+
       foreach (DBEpisode objLoop in lstDBEpisodes)
       {
         Log.Debug("WatchedSynchronizer: The Watched Status for file '" + objLoop[DBEpisode.cFilename] + "' was toggled to '" + bolWatched + "',");
-        OnTVSeriesToggledWatchedImpl(objLoop[DBEpisode.cFilename], bolWatched);
+
+        //Create Watched Event
+
+        objWatchedStateEvent.EventType = EventType.Toggle;
+        objWatchedStateEvent.MediaType = MediaType.MPTVSeries;
+        objWatchedStateEvent.strFileName = objLoop[DBEpisode.cFilename];
+        objWatchedStateEvent.intStopTime = 0;
+        objWatchedStateEvent.bolWatched = bolWatched;
+        objWatchedStateEvent.bolUse_gPlayer = false;
+
+        //Enqueue Event
+
+        FireWatchedEvent(objWatchedStateEvent);
+
       }
     }
 
@@ -338,21 +531,87 @@ namespace WatchedSynchronizer
       }
     }
 
+    /// <summary>
+    /// FireWatchedEvent will be triggerd on any Mediaportal stop, change or toggle event.
+    /// The needed data is added to the queue "mWatchStateEventQueue".
+    /// </summary>
+   
+    private void FireWatchedEvent(WatchedStateEvent objWatchedStateEvent)
+    {
+        //Add needed g_Player data if objWatchedStateEvent.bolUse_gPlayer is set.
+        if (objWatchedStateEvent.bolUse_gPlayer)
+        {
+            try
+            {
+                objWatchedStateEvent.gPlayer.SetResumeBDTitleState = g_Player.SetResumeBDTitleState;
+                objWatchedStateEvent.gPlayer.CurrentPosition = g_Player.Player.CurrentPosition;
+                objWatchedStateEvent.gPlayer.CurrentFile = g_Player.CurrentFile;
+                objWatchedStateEvent.gPlayer.Duration = g_Player.Player.Duration;
+                objWatchedStateEvent.gPlayer.IsDVDMenu = g_Player.IsDVDMenu;
+                g_Player.Player.GetResumeState(out objWatchedStateEvent.gPlayer.bteResumeData);
+            }
+            catch (Exception ex)
+            {
+                Log.Error("WatchedSynchronizer: FireWatchedEvent:exception err:{0} stack:{1}", ex.Message, ex.StackTrace);
+            }
+        }
+        else
+        {
+            objWatchedStateEvent.gPlayer.SetResumeBDTitleState = 0;
+            objWatchedStateEvent.gPlayer.CurrentPosition = 0;
+            objWatchedStateEvent.gPlayer.CurrentFile = "";
+            objWatchedStateEvent.gPlayer.Duration = 0;
+            objWatchedStateEvent.gPlayer.IsDVDMenu = false;
+            objWatchedStateEvent.gPlayer.bteResumeData = new byte[] {0x00 };
+        }
+
+        //DateTime when the item should be processed.
+
+        objWatchedStateEvent.dtNextCheck = DateTime.Now;
+
+        //Enqueue Event for every configured database.
+
+        switch (objWatchedStateEvent.MediaType)
+        {
+            case MediaType.MPTVSeries:
+                foreach (AdditionalTVSeriesDatabase objLoop in mTVSeriesDatabases)
+                {
+                    objWatchedStateEvent.objDB = objLoop;
+                    mWatchStateEventQueue.Enqueue(objWatchedStateEvent);
+                }
+                break;
+
+            case MediaType.MPVideo:
+                foreach (AdditionalVideoDatabase objLoop in mVideoDatabases)
+                {
+                    objWatchedStateEvent.objDB = objLoop;
+                    mWatchStateEventQueue.Enqueue(objWatchedStateEvent);
+                }
+                break;
+
+            default:
+                Log.Debug("WatchedSynchronizer: FireWatchedEvent: unknown MediaType");
+                break;
+        }
+    }
+
     #region Video databases
 
     /// <summary>
-    /// Methods in this region are run if the media type is "MPVideo" and a gplayer event was triggered.
-    /// The defined methods run the necessary commands to update all configured video databases.
+    /// Method "ProcessMPVideoWatchedStateEvent" is run if the media type is "MPVideo" and a gplayer event was triggered.
+    /// The method runs the necessary commands to update the video databases specified in the event.
+    /// Return:
+    /// 1 = Infos written to given DB -> Event could be cleared from queue
+    /// <0 = DB is locked by other user -> Event should not be cleared from queue -> Retry
+    /// 0 = other error (ex. file not found in db, file does not exists...) -> Event could be cleared from queue
     /// </summary>
 
-    //Method OnPlayBackEndedVideoDataBases is run when movie was watched to the end.
-
-    private void OnPlayBackEndedVideoDataBases(string strFileName)
+    private static int ProcessMPVideoWatchedStateEvent(WatchedStateEvent objWatchedStateEvent)
     {
-      bool bolStacked = false;
-      foreach (AdditionalVideoDatabase objLoop in mVideoDatabases)
-      {
-        objLoop.ReOpen();
+        bool bolStacked = false;
+        AdditionalVideoDatabase objMPVideoDB = (AdditionalVideoDatabase)objWatchedStateEvent.objDB;
+
+        objMPVideoDB.ReOpen();
         bool bolUpdated = false;
         ArrayList alsFiles = new ArrayList();
         int intDuration = 0;
@@ -361,259 +620,213 @@ namespace WatchedSynchronizer
 
         //Get MovieID and all its correlated media file(s).
 
-        int intMovieId = objLoop.GetMovieId(strFileName);
+        int intMovieId = objMPVideoDB.GetMovieId(objWatchedStateEvent.strFileName);
         if (intMovieId == -1)
         {
-          Log.Warn("WatchedSynchronizer: File '" + strFileName + "' is not available in database '" + objLoop.DatabaseName + "'.");
-          return;
+            Log.Warn("WatchedSynchronizer: ProcessMPVideoWatchedStateEvent: File '" + objWatchedStateEvent.strFileName + "' is not available in database '" + objMPVideoDB.DatabaseName + "'.");
+            objMPVideoDB.Dispose();
+            return 0;
         }
         else
         {
-          objLoop.GetFilesForMovie(intMovieId, ref alsFiles);
+            objMPVideoDB.GetFilesForMovie(intMovieId, ref alsFiles);
         }
 
         //Check if MovieID consists of several media files.
 
         if (alsFiles.Count <= 0)
         {
-          Log.Warn("WatchedSynchronizer: File '" + strFileName + "' is not available in database '" + objLoop.DatabaseName + "'.");
-          return;
+            Log.Warn("WatchedSynchronizer: ProcessMPVideoWatchedStateEvent: File '" + objWatchedStateEvent.strFileName + "' is not available in database '" + objMPVideoDB.DatabaseName + "'.");
+            objMPVideoDB.Dispose();
+            return 0;
         }
         else if (alsFiles.Count > 1)
         {
-          bolStacked = true;
+            bolStacked = true;
         }
 
         //Calculates the total duration of all media files of the MovieID.
 
         foreach (string strLoop in alsFiles)
         {
-          intTotalDuration += objLoop.GetVideoDuration(objLoop.GetFileId(strLoop));
+            intTotalDuration += objMPVideoDB.GetVideoDuration(objMPVideoDB.GetFileId(strLoop));
         }
 
-        //Resets the MovieStopTime and the ResumeData for the media file which was last played.
-
-        for (int intLoop = 0; intLoop < alsFiles.Count; intLoop++)
+        //Does various updates depending on the EventType.
+        switch(objWatchedStateEvent.EventType)
         {
-          string strFilePath = (string)alsFiles[intLoop];
-          byte[] bteResumeData = null;
-          int intFileId = objLoop.GetFileId(strFilePath);
-          if (intFileId < 0)
-          {
-            break;
-          }
-          objLoop.GetMovieStopTimeAndResumeData(intFileId, out bteResumeData, g_Player.SetResumeBDTitleState);
-          objLoop.SetMovieStopTimeAndResumeData(intFileId, 0, bteResumeData, g_Player.SetResumeBDTitleState);
-          bolUpdated = true;
-        }
+        
+            case EventType.Ended:
 
-        //Calculates the Watched percentage of the movie based on all media items correlated.
+                //Resets the MovieStopTime and the ResumeData for the media file which was last played.
 
-        if (bolStacked && intTotalDuration != 0)
-        {
-          for (int i = 0; i < alsFiles.Count; i++)
-          {
-            int intFileId = objLoop.GetFileId((string)alsFiles[i]);
-            if (strFileName != (string)alsFiles[i])
-            {
-              intDuration += objLoop.GetVideoDuration(intFileId);
-              continue;
-            }
-            intPlayTimePercentage = (int)(100 * (intDuration + g_Player.Player.CurrentPosition) / intTotalDuration);
-            break;
-          }
-        }
-        else
-        {
-          intPlayTimePercentage = 100;
+                for (int intLoop = 0; intLoop < alsFiles.Count; intLoop++)
+                {
+                    string strFilePath = (string)alsFiles[intLoop];
+                    byte[] bteResumeData = null;
+                    int intFileId = objMPVideoDB.GetFileId(strFilePath);
+                    if (intFileId < 0)
+                    {
+                        break;
+                    }
+                    objMPVideoDB.GetMovieStopTimeAndResumeData(intFileId, out bteResumeData, objWatchedStateEvent.gPlayer.SetResumeBDTitleState);
+                    objMPVideoDB.SetMovieStopTimeAndResumeData(intFileId, 0, bteResumeData, objWatchedStateEvent.gPlayer.SetResumeBDTitleState);
+                    bolUpdated = true;
+                }
+
+                //Calculates the Watched percentage of the movie based on all media items correlated.
+
+                if (bolStacked && intTotalDuration != 0)
+                {
+                    for (int i = 0; i < alsFiles.Count; i++)
+                    {
+                        int intFileId = objMPVideoDB.GetFileId((string)alsFiles[i]);
+                        if (objWatchedStateEvent.strFileName != (string)alsFiles[i])
+                        {
+                            intDuration += objMPVideoDB.GetVideoDuration(intFileId);
+                            continue;
+                        }
+                        intPlayTimePercentage = (int)(100 * (intDuration + objWatchedStateEvent.gPlayer.CurrentPosition) / intTotalDuration);
+                        break;
+                    }
+                }
+                else
+                {
+                    intPlayTimePercentage = 100;
+                }
+
+                break;
+
+           case EventType.StopOrChanged:
+
+                //Calculates the Watched percentage of the movie based on all media items correlated.
+
+                if (bolStacked && intTotalDuration != 0)
+                {
+                    for (int intLoop = 0; intLoop < alsFiles.Count; intLoop++)
+                    {
+                        if (objWatchedStateEvent.gPlayer.CurrentFile != (string)alsFiles[intLoop])
+                        {
+                            intDuration += objMPVideoDB.GetVideoDuration(objMPVideoDB.GetFileId((string)alsFiles[intLoop]));
+                            continue;
+                        }
+                        intPlayTimePercentage = (100 * (intDuration + objWatchedStateEvent.intStopTime) / intTotalDuration);
+                        break;
+                    }
+                }
+                else
+                {
+                    if (objWatchedStateEvent.gPlayer.Duration >= 1)
+                    {
+                        intPlayTimePercentage = (int)Math.Ceiling((objWatchedStateEvent.intStopTime / objWatchedStateEvent.gPlayer.Duration) * 100);
+                    }
+                }
+
+                //Sets the Watched status and correlated for the media file which was last played.
+
+                for (int intLoop = 0; intLoop < alsFiles.Count; intLoop++)
+                {
+                    string strFilePath = (string)alsFiles[intLoop];
+                    int intFileId = objMPVideoDB.GetFileId(strFilePath);
+                    intMovieId = objMPVideoDB.GetMovieId(strFilePath);
+
+                    //Check if a DVD/Blueray was played and set the Watched status and correlated according to that.
+
+                    if (objWatchedStateEvent.gPlayer.IsDVDMenu)
+                    {
+                        objMPVideoDB.SetMovieStopTimeAndResumeData(intFileId, 0, null, objWatchedStateEvent.gPlayer.SetResumeBDTitleState);
+                        objMPVideoDB.SetMovieWatchedStatus(intMovieId, true, 100);
+                        objMPVideoDB.MovieWatchedCountIncrease(intMovieId);
+                    }
+
+                    //Check if the media file currently played is the one in the loop and set the Watched status and correlated according to that.
+
+                    else if ((objWatchedStateEvent.strFileName.Trim().ToLowerInvariant().Equals(strFilePath.Trim().ToLowerInvariant())) && (objWatchedStateEvent.intStopTime > 0))
+                    {
+                        objMPVideoDB.GetMovieStopTimeAndResumeData(intFileId, out objWatchedStateEvent.gPlayer.bteResumeData, objWatchedStateEvent.gPlayer.SetResumeBDTitleState);
+                        objMPVideoDB.SetMovieStopTimeAndResumeData(intFileId, objWatchedStateEvent.intStopTime, objWatchedStateEvent.gPlayer.bteResumeData, objWatchedStateEvent.gPlayer.SetResumeBDTitleState);
+
+                        //Updates the Watched status for all media files based on the configuration done for the video database.
+
+                        if (intPlayTimePercentage >= mWatchedPercentageVideoDatabase)
+                        {
+                            objMPVideoDB.SetMovieWatchedStatus(intMovieId, true, intPlayTimePercentage);
+                            objMPVideoDB.MovieWatchedCountIncrease(intMovieId);
+                            bolUpdated = true;
+                        }
+                        else
+                        {
+                            int intPercent = 0;
+                            int intTimesWatched = 0;
+                            bool bolWatched = objMPVideoDB.GetMovieWatchedStatus(intMovieId, out intPercent, out intTimesWatched);
+                            objMPVideoDB.SetMovieWatchedStatus(intMovieId, bolWatched, intPlayTimePercentage);
+                            bolUpdated = true;
+                        }
+                    }
+                    else
+                    {
+                        objMPVideoDB.DeleteMovieStopTime(intFileId);
+                    }
+                }
+
+                break;
+
+           case EventType.Toggle:
+           default:
+                Log.Debug("WatchedSynchronizer: ProcessMPVideoWatchedStateEvent: unkown EventType: " + objWatchedStateEvent.EventType.ToString());
+                break;
         }
 
         //Updates the Watched status based on the configuration done for the video database.
 
         if (mMarkWatchedFilesVideoDatabase)
         {
-          IMDBMovie objIMDBMovie = new IMDBMovie();
-          objLoop.GetMovieInfoById(intMovieId, ref objIMDBMovie);
-          if (!objIMDBMovie.IsEmpty)
-          {
-
-            //Updates the Watched status for all media files based on the configuration done for the video database. 
-
-            if (intPlayTimePercentage >= mWatchedPercentageVideoDatabase)
+            IMDBMovie objIMDBMovie = new IMDBMovie();
+            objMPVideoDB.GetMovieInfoById(intMovieId, ref objIMDBMovie);
+            if (!objIMDBMovie.IsEmpty)
             {
-              objIMDBMovie.Watched = 1;
-              objLoop.SetWatched(objIMDBMovie);
-              objLoop.SetMovieWatchedStatus(intMovieId, true, intPlayTimePercentage);
-              objLoop.MovieWatchedCountIncrease(intMovieId);
-              objLoop.SetDateWatched(objIMDBMovie);
-              bolUpdated = true;
+
+                //Updates the Watched status for all media files based on the configuration done for the video database.
+
+                if (intPlayTimePercentage >= mWatchedPercentageVideoDatabase)
+                {
+                    objIMDBMovie.Watched = 1;
+
+                    if(objWatchedStateEvent.EventType == EventType.Ended)
+                    {
+                        objMPVideoDB.SetWatched(objIMDBMovie);
+                        objMPVideoDB.SetMovieWatchedStatus(intMovieId, true, intPlayTimePercentage);
+                        objMPVideoDB.MovieWatchedCountIncrease(intMovieId);
+                        objMPVideoDB.SetDateWatched(objIMDBMovie);
+                    }else if(objWatchedStateEvent.EventType == EventType.Ended)
+                    {
+                        objIMDBMovie.DateWatched = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+                        objMPVideoDB.SetMovieInfoById(intMovieId, ref objIMDBMovie);
+                    }
+                    bolUpdated = true;
+                }
+                else if(objWatchedStateEvent.EventType == EventType.Ended)
+                {
+                    int intPercent = 0;
+                    int intTimesWatched = 0;
+                    bool bolWatched = objMPVideoDB.GetMovieWatchedStatus(intMovieId, out intPercent, out intTimesWatched);
+                    objMPVideoDB.SetMovieWatchedStatus(intMovieId, bolWatched, intPlayTimePercentage);
+                    bolUpdated = true;
+                }
             }
-            else
-            {
-              int intPercent = 0;
-              int intTimesWatched = 0;
-              bool bolWatched = objLoop.GetMovieWatchedStatus(intMovieId, out intPercent, out intTimesWatched);
-              objLoop.SetMovieWatchedStatus(intMovieId, bolWatched, intPlayTimePercentage);
-              bolUpdated = true;
-            }
-          }
         }
 
         //Check if update was successfull and write to media portal log.
 
         if (bolUpdated == true)
         {
-          Log.Info("WatchedSynchronizer: Information for file '" + strFileName + "' was updated in database '" + objLoop.DatabaseName + "'.");
+            Log.Info("WatchedSynchronizer: ProcessMPVideoWatchedStateEvent: Information for file '" + objWatchedStateEvent.strFileName + "' was updated in database '" + objMPVideoDB.DatabaseName + "'.");
         }
-        objLoop.Dispose();
-      }
-    }
+        objMPVideoDB.Dispose();
 
+        //Update finished succesfully -> Event could be cleared from queue
 
-    //Method OnPlayBackStoppedOrChangedVideoDatabases is run when movie playback stopped before the end.
-
-    private void OnPlayBackStoppedOrChangedVideoDatabases(g_Player.MediaType enuType, int intStopTime, string strFileName)
-    {
-      bool bolStacked = false;
-      foreach (AdditionalVideoDatabase objLoop in mVideoDatabases)
-      {
-        objLoop.ReOpen();
-        bool bolUpdated = false;
-        ArrayList alsFiles = new ArrayList();
-        int intDuration = 0;
-        int intTotalDuration = 0;
-        int intPlayTimePercentage = 0;
-
-        //Get MovieID and all its correlated media file(s).
-
-        int intMovieId = objLoop.GetMovieId(strFileName);
-        if (intMovieId == -1)
-        {
-          Log.Warn("WatchedSynchronizer: File '" + strFileName + "' is not available in database '" + objLoop.DatabaseName + "'.");
-          return;
-        }
-        else
-        {
-          objLoop.GetFilesForMovie(intMovieId, ref alsFiles);
-        }
-
-        //Check if MovieID consists of several media files.
-
-        if (alsFiles.Count <= 0)
-        {
-          Log.Warn("WatchedSynchronizer: File '" + strFileName + "' is not available in database '" + objLoop.DatabaseName + "'.");
-          return;
-        }
-        else if (alsFiles.Count > 1)
-        {
-          bolStacked = true;
-        }
-
-        //Calculates the total duration of all media files of the MovieID.
-
-        foreach (string strLoop in alsFiles)
-        {
-          intTotalDuration += objLoop.GetVideoDuration(objLoop.GetFileId(strLoop));
-        }
-
-        //Calculates the Watched percentage of the movie based on all media items correlated.
-
-        if (bolStacked && intTotalDuration != 0)
-        {
-          for (int intLoop = 0; intLoop < alsFiles.Count; intLoop++)
-          {
-            if (g_Player.CurrentFile != (string)alsFiles[intLoop])
-            {
-              intDuration += objLoop.GetVideoDuration(objLoop.GetFileId((string)alsFiles[intLoop]));
-              continue;
-            }
-            intPlayTimePercentage = (100 * (intDuration + intStopTime) / intTotalDuration);
-            break;
-          }
-        }
-        else
-        {
-          if (g_Player.Player.Duration >= 1)
-          {
-            intPlayTimePercentage = (int)Math.Ceiling((intStopTime / g_Player.Player.Duration) * 100);
-          }
-        }
-
-        //Sets the Watched status and correlated for the media file which was last played.
-
-        for (int intLoop = 0; intLoop < alsFiles.Count; intLoop++)
-        {
-          string strFilePath = (string)alsFiles[intLoop];
-          int intFileId = objLoop.GetFileId(strFilePath);
-          intMovieId = objLoop.GetMovieId(strFilePath);
-
-          //Check if a DVD/Blueray was played and set the Watched status and correlated according to that.
-
-          if (g_Player.IsDVDMenu)
-          {
-            objLoop.SetMovieStopTimeAndResumeData(intFileId, 0, null, g_Player.SetResumeBDTitleState);
-            objLoop.SetMovieWatchedStatus(intMovieId, true, 100);
-            objLoop.MovieWatchedCountIncrease(intMovieId);
-          }
-
-          //Check if the media file currently played is the one in the loop and set the Watched status and correlated according to that.
-
-          else if ((strFileName.Trim().ToLowerInvariant().Equals(strFilePath.Trim().ToLowerInvariant())) && (intStopTime > 0))
-          {
-            byte[] bteResumeData = null;
-            g_Player.Player.GetResumeState(out bteResumeData);
-            objLoop.GetMovieStopTimeAndResumeData(intFileId, out bteResumeData, g_Player.SetResumeBDTitleState);
-            objLoop.SetMovieStopTimeAndResumeData(intFileId, intStopTime, bteResumeData, g_Player.SetResumeBDTitleState);
-
-            //Updates the Watched status for all media files based on the configuration done for the video database.
-
-            if (intPlayTimePercentage >= mWatchedPercentageVideoDatabase)
-            {
-              objLoop.SetMovieWatchedStatus(intMovieId, true, intPlayTimePercentage);
-              objLoop.MovieWatchedCountIncrease(intMovieId);
-              bolUpdated = true;
-            }
-            else
-            {
-              int intPercent = 0;
-              int intTimesWatched = 0;
-              bool bolWatched = objLoop.GetMovieWatchedStatus(intMovieId, out intPercent, out intTimesWatched);
-              objLoop.SetMovieWatchedStatus(intMovieId, bolWatched, intPlayTimePercentage);
-              bolUpdated = true;
-            }
-          }
-          else
-          {
-            objLoop.DeleteMovieStopTime(intFileId);
-          }
-        }
-
-        //Updates the Watched status based on the configuration done for the video database.
-
-        if (mMarkWatchedFilesVideoDatabase)
-        {
-          IMDBMovie objIMDBMovie = new IMDBMovie();
-          objLoop.GetMovieInfoById(intMovieId, ref objIMDBMovie);
-          if (!objIMDBMovie.IsEmpty)
-          {
-            if (intPlayTimePercentage >= mWatchedPercentageVideoDatabase)
-            {
-              objIMDBMovie.Watched = 1;
-              objIMDBMovie.DateWatched = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
-              objLoop.SetMovieInfoById(intMovieId, ref objIMDBMovie);
-              bolUpdated = true;
-            }
-          }
-        }
-
-        //Check if update was successfull and write to media portal log.
-
-        if (bolUpdated == true)
-        {
-          Log.Info("WatchedSynchronizer: Information for file '" + strFileName + "' was updated in database '" + objLoop.DatabaseName + "'.");
-        }
-        objLoop.Dispose();
-      }
+        return 1;
     }
 
     #endregion
@@ -621,301 +834,145 @@ namespace WatchedSynchronizer
     #region TVSeries databases
 
     /// <summary>
-    /// Methods in this region are run if the media type is "MPTVSeries" or the trigger was an event related to "MPTVSeries".
-    /// The defined methods run the necessary commands to update all configured video databases.
+    /// Method "ProcessMPTVSeriesWatchedStateEvent" is run if the media type is "MPTVSeries" and a gplayer event was triggered or the trigger was an event related to "MPTVSeries".
+    /// The method runs the necessary commands to update the video databases specified in the event.
+    /// Return:
+    /// 1 = Infos written to given DB -> Event could be cleared from queue
+    /// <0 = DB is locked by other user -> Event should not be cleared from queue -> Retry
+    /// 0 = other error (ex. file not found in db, file does not exists...) -> Event could be cleared from queue
     /// </summary>
 
-    //The method OnTVSeriesToggledWatchedImpl is run when the event OnTVSeriesToggledWatched was triggered.
-
-    private void OnTVSeriesToggledWatchedImpl(string strFileName, bool bolWatched)
+    private static int ProcessMPTVSeriesWatchedStateEvent(WatchedStateEvent objWatchedStateEvent)
     {
-      foreach (AdditionalTVSeriesDatabase objLoop in mTVSeriesDatabases)
-      {
-        objLoop.ReOpen();
-        bool bolUpdated = false;
-        ArrayList alsCompositeIds = new ArrayList();
-
-        //Get CompositeId(s). This is done since it it used for checking that the respective row is available in the additional database.
-
-        string strCompositeId = objLoop.GetCompositeId(strFileName);
-        if (strCompositeId == string.Empty)
-        {
-          Log.Warn("WatchedSynchronizer: File '" + strFileName + "' is not available in database '" + objLoop.DatabaseName + "'.");
-          return;
-        }
-        else
-        {
-          objLoop.GetCompositeIdsForEpisode(strCompositeId, ref alsCompositeIds);
-        }
-        if (alsCompositeIds.Count <= 0)
-        {
-          Log.Warn("WatchedSynchronizer: File '" + strFileName + "' is not available in database '" + objLoop.DatabaseName + "'.");
-          return;
-        }
-
-        //Updates the Watched status for all CompositeIds.
-
-        for (int intLoop = 0; intLoop < alsCompositeIds.Count; intLoop++)
-        {
-          strCompositeId = (string)alsCompositeIds[intLoop];
-          bool bolWatchedCompositeId = false;
-          string strWatchedDate;
-          int intStopTime;
-
-          //Check if episode was already watched.
-
-          objLoop.GetEpisodeWatchedStatus(strCompositeId, out bolWatchedCompositeId, out strWatchedDate, out intStopTime);
-
-          //Updates the Watched status if episode was unwatched and watched was toggled.
-
-          if (bolWatchedCompositeId == false && bolWatched == true)
-          {
-
-            //Update the Watched status for the episodes and correlated it is unwatched.
-
-            objLoop.SetEpisodeWatchedStatus(strCompositeId, true, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"), 0, true);
-            objLoop.EpisodePlayCountIncrease(strCompositeId, true);
-            string strSeasonId;
-            bool bolSeasonWatched = false;
-            objLoop.GetSeasonWatchedStatus(strCompositeId, out strSeasonId, out bolSeasonWatched);
-            if (bolSeasonWatched == false)
-            {
-
-              //Update the Unwatched episodes count for the season if it is unwatched.
-
-              objLoop.SeasonUnWatchedCountDecrease(strSeasonId);
-              string strSeriesId;
-              bool bolSeriesWatched = false;
-              objLoop.GetSeriesWatchedStatus(strCompositeId, out strSeriesId, out bolSeriesWatched);
-              if (bolSeriesWatched == false)
-              {
-
-                //Update the Unwatched episodes count for the series if it is unwatched.
-
-                objLoop.SeriesUnWatchedCountDecrease(strSeriesId);
-              }
-            }
-            bolUpdated = true;
-          }
-          else
-          {
-
-            //Updates the Watched status if episode was watched and watched or unwatched was toggled.
-
-            objLoop.SetEpisodeWatchedStatus(strCompositeId, bolWatched, strWatchedDate, intStopTime);
-            bolUpdated = true;
-          }
-
-          //Check if update was successfull and write to media portal log.
-
-          if (bolUpdated == true)
-          {
-            Log.Info("WatchedSynchronizer: Information for file '" + strFileName + "' was updated in database '" + objLoop.DatabaseName + "'.");
-          }
-          objLoop.Dispose();
-        }
-      }
-    }
-
-
-    //Method OnPlayBackEndedTVSeriesDataBases is run when tvseries was watched to the end.
-
-    private void OnPlayBackEndedTVSeriesDataBases(string strFileName)
-    {
-      int intPlayTimePercentage = 100;
-      foreach (AdditionalTVSeriesDatabase objLoop in mTVSeriesDatabases)
-      {
-        objLoop.ReOpen();
-        bool bolUpdated = false;
-        ArrayList alsCompositeIds = new ArrayList();
-
-        //Get CompositeId(s).
-
-        string strCompositeId = objLoop.GetCompositeId(strFileName);
-        if (strCompositeId == string.Empty)
-        {
-          Log.Warn("WatchedSynchronizer: File '" + strFileName + "' is not available in database '" + objLoop.DatabaseName + "'.");
-          return;
-        }
-        else
-        {
-          objLoop.GetCompositeIdsForEpisode(strCompositeId, ref alsCompositeIds);
-        }
-        if (alsCompositeIds.Count <= 0)
-        {
-          Log.Warn("WatchedSynchronizer: File '" + strFileName + "' is not available in database '" + objLoop.DatabaseName + "'.");
-          return;
-        }
-
-        //Updates the Watched status for all CompositeIds.
-
-        for (int intLoop = 0; intLoop < alsCompositeIds.Count; intLoop++)
-        {
-          strCompositeId = (string)alsCompositeIds[intLoop];
-          bool bolWatched = false;
-          string strWatchedDate;
-          int intStopTime;
-
-          //Check if episode was already watched.
-
-          objLoop.GetEpisodeWatchedStatus(strCompositeId, out bolWatched, out strWatchedDate, out intStopTime);
-
-          //Updates the Watched status based on the configuration done for the tvseries database.
-
-          if (intPlayTimePercentage >= mWatchedPercentageTVSeriesDatabase)
-          {
-            if (bolWatched == false)
-            {
-
-              //Update the Watched status for the episodes and correlated it is unwatched.
-
-              objLoop.SetEpisodeWatchedStatus(strCompositeId, true, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"), 0, true);
-              string strSeasonId;
-              bool bolSeasonWatched = false;
-              objLoop.GetSeasonWatchedStatus(strCompositeId, out strSeasonId, out bolSeasonWatched);
-              if (bolSeasonWatched == false)
-              {
-
-                //Update the Unwatched episodes count for the season if it is unwatched.
-
-                objLoop.SeasonUnWatchedCountDecrease(strSeasonId);
-                string strSeriesId;
-                bool bolSeriesWatched = false;
-                objLoop.GetSeriesWatchedStatus(strCompositeId, out strSeriesId, out bolSeriesWatched);
-                if (bolSeriesWatched == false)
-                {
-
-                  //Update the Unwatched episodes count for the series if it is unwatched.
-
-                  objLoop.SeriesUnWatchedCountDecrease(strSeriesId);
-                }
-              }
-            }
-            else
-            {
-              objLoop.SetEpisodeWatchedStatus(strCompositeId, bolWatched, strWatchedDate, 0);
-            }
-            objLoop.EpisodePlayCountIncrease(strCompositeId);
-            bolUpdated = true;
-          }
-          else
-          {
-            objLoop.SetEpisodeWatchedStatus(strCompositeId, bolWatched, strWatchedDate, 0);
-            objLoop.EpisodePlayCountIncrease(strCompositeId);
-            bolUpdated = true;
-          }
-        }
-
-        //Check if update was successfull and write to media portal log.
-
-        if (bolUpdated == true)
-        {
-          Log.Info("WatchedSynchronizer: Information for file '" + strFileName + "' was updated in database '" + objLoop.DatabaseName + "'.");
-        }
-        objLoop.Dispose();
-      }
-    }
-
-
-    //Method OnPlayBackStoppedOrChangedTVSeriesDatabases is run when tvseries playback stopped before the end.
-
-    private void OnPlayBackStoppedOrChangedTVSeriesDatabases(g_Player.MediaType enuType, int intStopTime, string strFileName)
-    {
-      foreach (AdditionalTVSeriesDatabase objLoop in mTVSeriesDatabases)
-      {
-        objLoop.ReOpen();
-        bool bolUpdated = false;
-        ArrayList alsCompositeIds = new ArrayList();
         int intPlayTimePercentage = 0;
+        AdditionalTVSeriesDatabase objTVSeriesDB = (AdditionalTVSeriesDatabase)objWatchedStateEvent.objDB;
+
+        objTVSeriesDB.ReOpen();
+        bool bolUpdated = false;
+        ArrayList alsCompositeIds = new ArrayList();
 
         //Get CompositeId(s).
 
-        string strCompositeId = objLoop.GetCompositeId(strFileName);
+        string strCompositeId = objTVSeriesDB.GetCompositeId(objWatchedStateEvent.strFileName);
         if (strCompositeId == string.Empty)
         {
-          Log.Warn("WatchedSynchronizer: File '" + strFileName + "' is not available in database '" + objLoop.DatabaseName + "'.");
-          return;
+            Log.Warn("WatchedSynchronizer: File '" + objWatchedStateEvent.strFileName + "' is not available in database '" + objTVSeriesDB.DatabaseName + "'.");
+            objTVSeriesDB.Dispose();
+            return 0;
         }
         else
         {
-          objLoop.GetCompositeIdsForEpisode(strCompositeId, ref alsCompositeIds);
+            objTVSeriesDB.GetCompositeIdsForEpisode(strCompositeId, ref alsCompositeIds);
         }
         if (alsCompositeIds.Count <= 0)
         {
-          Log.Warn("WatchedSynchronizer: File '" + strFileName + "' is not available in database '" + objLoop.DatabaseName + "'.");
-          return;
+            Log.Warn("WatchedSynchronizer: File '" + objWatchedStateEvent.strFileName + "' is not available in database '" + objTVSeriesDB.DatabaseName + "'.");
+            objTVSeriesDB.Dispose();
+            return 0;
         }
 
         //Calculates the Watched percentage of the episode.
 
-        if (g_Player.Player.Duration >= 1)
+        if ((objWatchedStateEvent.gPlayer.Duration >= 1) && (objWatchedStateEvent.EventType == EventType.StopOrChanged))
         {
-          intPlayTimePercentage = (int)Math.Ceiling((intStopTime / g_Player.Player.Duration) * 100);
+            intPlayTimePercentage = (int)Math.Ceiling((objWatchedStateEvent.intStopTime / objWatchedStateEvent.gPlayer.Duration) * 100);
+        }
+        else if (objWatchedStateEvent.EventType == EventType.Ended)
+        {
+            intPlayTimePercentage = 100;
         }
 
         //Updates the Watched status for all CompositeIds.
 
         for (int intLoop = 0; intLoop < alsCompositeIds.Count; intLoop++)
         {
-          strCompositeId = (string)alsCompositeIds[intLoop];
-          bool bolWatched = false;
-          string strWatchedDate;
-          int intStopTimeDummy;
-          objLoop.GetEpisodeWatchedStatus(strCompositeId, out bolWatched, out strWatchedDate, out intStopTimeDummy);
+            strCompositeId = (string)alsCompositeIds[intLoop];
+            bool bolWatched = false;
+            string strWatchedDate;
+            int intStopTime;
 
-          //Updates the Watched status based on the configuration done for the tvseries database.
+            //Check if episode was already watched.
 
-          if (intPlayTimePercentage >= mWatchedPercentageTVSeriesDatabase)
-          {
-            if (bolWatched == false)
+            objTVSeriesDB.GetEpisodeWatchedStatus(strCompositeId, out bolWatched, out strWatchedDate, out intStopTime);
+
+            //Updates the Watched status based on the configuration done for the tvseries database
+
+            if (((objWatchedStateEvent.EventType != EventType.Toggle) && (intPlayTimePercentage >= mWatchedPercentageTVSeriesDatabase)) || ((objWatchedStateEvent.EventType == EventType.Toggle) && (bolWatched == false && objWatchedStateEvent.bolWatched == true)))
             {
-
-              //Update the Watched status for the episodes and correlated it is unwatched.
-
-              objLoop.SetEpisodeWatchedStatus(strCompositeId, true, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"), 0, true);
-              string strSeasonId;
-              bool bolSeasonWatched = false;
-              objLoop.GetSeasonWatchedStatus(strCompositeId, out strSeasonId, out bolSeasonWatched);
-              if (bolSeasonWatched == false)
-              {
-
-                //Update the Unwatched episodes count for the season if it is unwatched.
-
-                objLoop.SeasonUnWatchedCountDecrease(strSeasonId);
-                string strSeriesId;
-                bool bolSeriesWatched = false;
-                objLoop.GetSeriesWatchedStatus(strCompositeId, out strSeriesId, out bolSeriesWatched);
-                if (bolSeriesWatched == false)
+                if (((objWatchedStateEvent.EventType != EventType.Toggle) && (bolWatched == false)) || ((objWatchedStateEvent.EventType == EventType.Toggle) && (bolWatched == false && objWatchedStateEvent.bolWatched == true)))
                 {
 
-                  //Update the Unwatched episodes count for the series if it is unwatched.
+                    //Update the Watched status for the episodes and correlated it is unwatched.
 
-                  objLoop.SeriesUnWatchedCountDecrease(strSeriesId);
+                    objTVSeriesDB.SetEpisodeWatchedStatus(strCompositeId, true, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"), 0, true);
+                    if (objWatchedStateEvent.EventType == EventType.Toggle) objTVSeriesDB.EpisodePlayCountIncrease(strCompositeId, true);
+                    string strSeasonId;
+                    bool bolSeasonWatched = false;
+                    objTVSeriesDB.GetSeasonWatchedStatus(strCompositeId, out strSeasonId, out bolSeasonWatched);
+                    if (bolSeasonWatched == false)
+                    {
+
+                        //Update the Unwatched episodes count for the season if it is unwatched.
+
+                        objTVSeriesDB.SeasonUnWatchedCountDecrease(strSeasonId);
+                        string strSeriesId;
+                        bool bolSeriesWatched = false;
+                        objTVSeriesDB.GetSeriesWatchedStatus(strCompositeId, out strSeriesId, out bolSeriesWatched);
+                        if (bolSeriesWatched == false)
+                        {
+
+                            //Update the Unwatched episodes count for the series if it is unwatched.
+
+                            objTVSeriesDB.SeriesUnWatchedCountDecrease(strSeriesId);
+                        }
+                    }
                 }
-              }
+                else
+                {
+                    if (objWatchedStateEvent.EventType == EventType.StopOrChanged)
+                    {
+                        strWatchedDate = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+                    }
+                    objTVSeriesDB.SetEpisodeWatchedStatus(strCompositeId, bolWatched, strWatchedDate, 0);
+                }
+                objTVSeriesDB.EpisodePlayCountIncrease(strCompositeId);
+                bolUpdated = true;
             }
             else
             {
-              objLoop.SetEpisodeWatchedStatus(strCompositeId, true, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"), 0);
+                if (objWatchedStateEvent.EventType == EventType.Ended)
+                {
+                    intStopTime = 0;
+                }
+                if (objWatchedStateEvent.EventType == EventType.StopOrChanged)
+                {
+                    intStopTime = objWatchedStateEvent.intStopTime;
+                }
+                if (objWatchedStateEvent.EventType == EventType.Toggle)
+                {
+                    bolWatched = objWatchedStateEvent.bolWatched;
+                }
+
+                //Update Watched State
+
+                objTVSeriesDB.SetEpisodeWatchedStatus(strCompositeId, bolWatched, strWatchedDate, intStopTime);
+
+                if (objWatchedStateEvent.EventType == EventType.Ended) objTVSeriesDB.EpisodePlayCountIncrease(strCompositeId);
+                bolUpdated = true;
             }
-            objLoop.EpisodePlayCountIncrease(strCompositeId);
-            bolUpdated = true;
-          }
-          else
-          {
-            objLoop.SetEpisodeWatchedStatus(strCompositeId, bolWatched, strWatchedDate, intStopTime);
-            bolUpdated = true;
-          }
         }
 
         //Check if update was successfull and write to media portal log.
 
         if (bolUpdated == true)
         {
-          Log.Info("WatchedSynchronizer: Information for file '" + strFileName + "' was updated in database '" + objLoop.DatabaseName + "'.");
+            Log.Info("WatchedSynchronizer: Information for file '" + objWatchedStateEvent.strFileName + "' was updated in database '" + objTVSeriesDB.DatabaseName + "'.");
         }
-        objLoop.Dispose();
-      }
+        objTVSeriesDB.Dispose();
+
+        //Update finished succesfully -> Event could be cleared from queue
+
+        return 1;
     }
 
     #endregion

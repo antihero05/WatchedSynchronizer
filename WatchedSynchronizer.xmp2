@@ -13,7 +13,7 @@
             <FileItem InstallType="CopyFile" SystemFile="false" Modified="true">
               <Param1 />
               <UpdateOption>OverwriteIfOlder</UpdateOption>
-              <LocalFileName>WatchedSynchronizer.dll</LocalFileName>
+              <LocalFileName>WatchedSynchronizer\bin\Debug\WatchedSynchronizer.dll</LocalFileName>
               <ZipFileName>Installer{CopyFile}\{da0f64fa-9f30-4943-bb24-3bd49d5e4314}-WatchedSynchronizer.dll</ZipFileName>
               <DestinationFilename>%Plugins%\process\WatchedSynchronizer.dll</DestinationFilename>
             </FileItem>
@@ -176,7 +176,7 @@ Click Next to continue or Cancel to exit Setup.</Value>
   <GeneralInfo>
     <Name>WatchedSynchronizer</Name>
     <Id>62d5d7be-6f69-4764-ae0a-d0ddc1e61111</Id>
-    <Author>antihero05</Author>
+    <Author>antihero05, pOpY</Author>
     <HomePage>https://github.com/antihero05/WatchedSynchronizer</HomePage>
     <ForumPage />
     <UpdateUrl />
@@ -184,7 +184,7 @@ Click Next to continue or Cancel to exit Setup.</Value>
       <Major>0</Major>
       <Minor>5</Minor>
       <Build>4</Build>
-      <Revision>3</Revision>
+      <Revision>4</Revision>
     </Version>
     <ExtensionDescription>WatchedSynchronizer is a process plugin that synchronizes several informations across your MediaPortal databases. As the plugin name suggest the plugin focuses on synchronizing the watched status of your media accross several databases. This includes extended information like the time you stopped the playback. This is responsible for the watched percentage displayed in MediaPortal.
 
@@ -196,12 +196,14 @@ Currently supported databases for synchronizing:
 
 MPVideo database
 MPTVSeries database</ExtensionDescription>
-    <VersionDescription>0.5.4.3: Fixed several bugs regarding the synchronization of MPTVSeries.</VersionDescription>
+    <VersionDescription>0.5.4.4:
+-Complete synchronization is now threaded to prevent interrupts.
+-Code Cleanup</VersionDescription>
     <DevelopmentStatus>Stable</DevelopmentStatus>
     <OnlineLocation />
-    <ReleaseDate>2015-01-28T14:04:23</ReleaseDate>
+    <ReleaseDate>2015-01-31T14:04:23</ReleaseDate>
     <Tags>multiple,several,database,databases,synchronize,watched,status</Tags>
-    <Location>C:\Dokumente und Einstellungen\MaWiDE\Desktop\WatchedSynchronizer_0.5.4.3.mpe1</Location>
+    <Location>C:\Dokumente und Einstellungen\MaWiDE\Desktop\WatchedSynchronizer_0.5.4.4.mpe1</Location>
     <Params>
       <Items>
         <SectionParam Name="Icon">
@@ -239,7 +241,7 @@ MPTVSeries database</ExtensionDescription>
       <FileItem InstallType="CopyFile" SystemFile="false" Modified="true">
         <Param1 />
         <UpdateOption>OverwriteIfOlder</UpdateOption>
-        <LocalFileName>WatchedSynchronizer.dll</LocalFileName>
+        <LocalFileName>WatchedSynchronizer\bin\Debug\WatchedSynchronizer.dll</LocalFileName>
         <ZipFileName>Installer{CopyFile}\{da0f64fa-9f30-4943-bb24-3bd49d5e4314}-WatchedSynchronizer.dll</ZipFileName>
         <DestinationFilename>%Plugins%\process\WatchedSynchronizer.dll</DestinationFilename>
       </FileItem>

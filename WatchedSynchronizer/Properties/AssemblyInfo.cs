@@ -29,7 +29,7 @@ using MediaPortal.Common.Utils;
 [assembly: AssemblyConfiguration("")]
 [assembly: AssemblyCompany("")]
 [assembly: AssemblyProduct("WatchedSynchronizer")]
-[assembly: AssemblyCopyright("Copyright ©  2014")]
+[assembly: AssemblyCopyright("Copyright ©  2015")]
 [assembly: AssemblyTrademark("")]
 [assembly: AssemblyCulture("")]
 
@@ -45,5 +45,5 @@ using MediaPortal.Common.Utils;
 
 [assembly: Guid("b298ce34-f556-44cc-a131-83ec57fd6a50")]
 
-[assembly: AssemblyVersion("0.5.4.2")]
-[assembly: AssemblyFileVersion("0.5.4.2")]
+[assembly: AssemblyVersion("0.5.4.4")]
+[assembly: AssemblyFileVersion("0.5.4.4")]
